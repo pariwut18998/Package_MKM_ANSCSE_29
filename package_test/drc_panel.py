@@ -68,12 +68,16 @@ def _fe_figure(G, order, EA, ea_steps, w=_BARW, state_font_size=12, y_range=None
 
 
 def _drc_figure(drc_fn, T, labels=None, bar_color='#1f77b4'):
-    """Bar chart of the degree-of-rate-control coefficients returned by drc_fn(T)."""
+    """Bar chart of the degree-of-rate-control coefficients returned by drc_fn(T).
+    bar_color: a single color for every bar, or {step: color} to color bars
+    individually (steps missing from the dict fall back to '#1f77b4")."""
     X = drc_fn(T)
     steps = sorted(X)
     vals = [X[s] for s in steps]
     x = labels if labels is not None else [f'step {s}' for s in steps]
-    fig = go.Figure(go.Bar(x=x, y=vals, marker_color=bar_color))
+    colors = ([bar_color.get(s, '#1f77b4') for s in steps]
+              if isinstance(bar_color, dict) else bar_color)
+    fig = go.Figure(go.Bar(x=x, y=vals, marker_color=colors))
     fig.update_layout(height=300, plot_bgcolor='white',
                       yaxis=dict(title='X_RC', range=[-0.2, 1.1], zeroline=True,
                                  zerolinecolor='#bbbbbb'),
@@ -139,35 +143,48 @@ def make_drc_panel(G, order, EA, ea_steps, labels, edges,
                            drc_out=drc_out, update=update)
 
 
+# step 3 (LH) is split into two independently-tunable barriers, one "as measured
+# from CO*" and one "as measured from 2O*" — see build_k_COox for how the two
+# combine into one physical rate. DRC/label ordering relies on '3_CO' < '3_O'
+# sorting lexicographically between '2' and '4' (verified: '2'<'3_CO'<'3_O'<'4').
 _COOX_DRC_LABELS = ['step 1\n(CO ads)', 'step 2\n(O₂ dis-ads)',
-                    'step 3\n(LH rxn)', 'step 4\n(CO₂ des)']
+                    'step 3\n(LH via CO*)', 'step 3\n(LH via 2O*)', 'step 4\n(CO₂ des)']
 
-# the 5 states that carry the real kinetics (must match the caller's G_CO_ox keys)
-_COOX_ORDER = ['CO(g)+½O₂+2*', 'CO*+½O₂+*', 'CO*+O*', 'CO₂*+*', 'CO₂(g)+2*']
+# colors for the two LH channels' TS curves; reused on the Ea sliders' labels
+_TS_COLOR_CO = '#d62728'   # red
+_TS_COLOR_O  = '#9467bd'   # purple
+
+# DRC bar colors: step-3 bars match their TS curve/slider color above, so the
+# bar plot visually ties back to which Ea barrier it corresponds to
+_COOX_BAR_COLORS = {'1': '#2ca02c', '2': '#2ca02c', '4': '#2ca02c',
+                    '3_CO': _TS_COLOR_CO, '3_O': _TS_COLOR_O}
+
+# the 6 states that carry the real kinetics (must match the caller's G_CO_ox keys)
+_COOX_ORDER = ['CO(g)+*', '½O₂(g)+*', 'CO*+½O₂+*', 'CO*+O*', 'CO₂*+*', 'CO₂(g)+2*']
 
 
-def _fe_figure_coox(G, EA, ea_step=3, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
+def _fe_figure_coox(G, EA, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
     """CO-oxidation free-energy diagram matching the reaction network exactly:
         CO(g)+*  <-> CO*        (step 1, barrierless)
         O2(g)+2* <-> 2O*        (step 2, barrierless)
-        CO* & 2O* <-> CO2*+*    (step 3, LH transition state)
+        CO* & 2O* <-> CO2*+*    (step 3, TWO independent LH transition states:
+                                 one measured from CO* [EA['3_CO']], one from
+                                 2O* [EA['3_O']] — see build_k_COox for how both
+                                 combine into the one physical rate constant)
         CO2*+*   <-> CO2(g)+*   (step 4, barrierless)
     Two independent starting points (CO(g)+*, O2(g)+2*) feed two independent
-    branches that both connect DIRECTLY to CO2*+* via the LH step — no
+    branches that both connect DIRECTLY to CO2*+* via their own TS peak — no
     separate co-adsorbed "CO*+O*" plateau is drawn.
 
-    G : the 5-state dict driving the kinetics (same as _COOX_ORDER, untouched).
-    Diagram-only quantities (never fed back into build_k_COox/the kinetics):
-      - O2(g)+2* is drawn at the same reference height as CO(g)+* (both start
-        "unreacted").
+    G  : the 6-state dict driving the kinetics (same as _COOX_ORDER, untouched).
+         CO(g)+* and ½O2(g)+* are independent entries (not forced equal) --
+         G['½O2(g)+*'] feeds the diagram's O2(g)+2* level directly.
+    EA : {'3_CO': barrier J/mol, '3_O': barrier J/mol} — mutated in place by the sliders.
+    Diagram-only quantity (never fed back into build_k_COox/the kinetics):
       - 2O*'s level is derived additively (non-interacting adsorbates):
-            G[2O*] = G[O2(g)+2*] + (G[CO*+O*] - G[CO*])
-      - the TS peak (step 3) is still measured from the real co-adsorbed
-        CO*+O* energy in G, so the barrier height stays kinetically accurate
-        even though that state isn't drawn as its own level.
+            G[2O*] = G[½O2(g)+*] + (G[CO*+O*] - G[CO*])
     """
-    g_cog, g_co, g_merged, g_prod, g_final = (G[s] for s in _COOX_ORDER)
-    g_o2g = g_cog                                  # both branches start "unreacted"
+    g_cog, g_o2g, g_co, g_merged, g_prod, g_final = (G[s] for s in _COOX_ORDER)
     g_o = g_o2g + (g_merged - g_co)                # additive 2O* branch level
 
     xs = {'COg': 0.0, 'O2g': 0.0, 'COs': 1.0, 'Os': 1.0, 'CO2s': 2.0, 'CO2g': 3.0}
@@ -197,22 +214,23 @@ def _fe_figure_coox(G, EA, ea_step=3, w=0.30, w_gas=0.12, state_font_size=10, y_
                                  line=dict(color='#1f77b4', width=2, dash='dot'),
                                  showlegend=False, hoverinfo='skip'))
 
-    # LH transition state (step 3): CO* AND 2O* both feed into it -> CO2*+*.
-    # peak height uses the real co-adsorbed CO*+O* energy (g_merged), not drawn as its own level
-    ts = g_merged + EA[ea_step] / 1e3
+    # LH transition states (step 3): CO* and 2O* each have their OWN barrier/peak,
+    # colored to match their Ea slider (see make_co_ox_panel), both descending
+    # into the same CO2*+* product. No on-chart peak label -- color + hover
+    # text identify each curve, the name lives on the slider instead.
     xpk = (xs['COs'] + xs['CO2s']) / 2
-    for precursor in ('COs', 'Os'):
+    for precursor, ea_key, label, color in [('COs', '3_CO', 'Ea(CO*)', _TS_COLOR_CO),
+                                            ('Os', '3_O', 'Ea(2O*)', _TS_COLOR_O)]:
         xa, xb = xs[precursor] + widths[precursor], xs['CO2s'] - widths['CO2s']
+        ts = ys[precursor] + EA[ea_key] / 1e3
         fig.add_trace(go.Scatter(
             x=[xa, xpk, xb], y=[ys[precursor], ts, ys['CO2s']], mode='lines',
-            line=dict(color='#d62728', width=2, shape='spline'), showlegend=False,
+            line=dict(color=color, width=2, shape='spline'), showlegend=False,
             text=[f'G = {ys[precursor]:.1f} kJ/mol',
-                  f'TS (step {ea_step})<br>Ea{ea_step} = {EA[ea_step]/1e3:.1f} kJ/mol<br>G_TS = {ts:.1f} kJ/mol',
+                  f'TS ({label})<br>{ea_key} = {EA[ea_key]/1e3:.1f} kJ/mol<br>G_TS = {ts:.1f} kJ/mol',
                   f'G = {ys["CO2s"]:.1f} kJ/mol'],
             hovertemplate='%{text}<extra></extra>',
         ))
-    fig.add_annotation(x=xpk, y=ts, yshift=10, text=f'Ea{ea_step}',
-                       showarrow=False, font=dict(color='#d62728', size=11))
 
     fig.update_layout(height=320, plot_bgcolor='white', paper_bgcolor='white',
                       xaxis=dict(visible=False),
@@ -221,35 +239,61 @@ def _fe_figure_coox(G, EA, ea_step=3, w=0.30, w_gas=0.12, state_font_size=10, y_
     return fig
 
 
-def make_co_ox_panel(G, EA, drc_fn, ea_step=3,
-                     ea_min=10, ea_max=200, ea_dstep=5,
-                     T0=600, T_min=300, T_max=1200, T_dstep=50, show=True):
-    """CO-oxidation panel: an Ea slider (for step `ea_step`) and a T slider drive
-    a free-energy diagram (CO*/O* branching, see _fe_figure_coox) + degree-of-
-    rate-control bar chart (no network view).
-    EA (dict, J/mol) is mutated in place; drc_fn(T) -> {step: X}."""
-    ea_slider = widgets.IntSlider(value=int(EA[ea_step] / 1e3), min=ea_min, max=ea_max,
-                                  step=ea_dstep, description=f'Ea{ea_step} (kJ/mol)',
-                                  style={'description_width': '100px'})
+def make_co_ox_panel(G, EA, drc_fn,
+                     ea_min=10, ea_max=200, ea_dstep=5, ea_window=None,
+                     T0=600, T_min=300, T_max=1200, T_dstep=50,
+                     fe_y_range=None, show=True):
+    """CO-oxidation panel: two Ea sliders — LH barrier measured from CO* and from
+    2O* respectively (see _fe_figure_coox) — plus a T slider drive the free-energy
+    diagram + degree-of-rate-control bar chart (no network view). Each Ea slider
+    carries a colored label (matching its TS curve's color) instead of the plot.
+    EA (dict, J/mol, keys '3_CO'/'3_O') is mutated in place; drc_fn(T) -> {step: X}.
+    ea_window : if set (kJ/mol), each slider spans its OWN origin Ea (from EA) +/- ea_window,
+                overriding ea_min/ea_max. If None, both sliders share [ea_min, ea_max].
+    fe_y_range : optional [ymin, ymax] (kJ/mol) fixing the free-energy diagram's
+                 y-axis so it doesn't rescale every time an Ea slider moves.
+                 If None, the axis auto-scales."""
+    def _bounds(key):
+        if ea_window is None:
+            return ea_min, ea_max
+        origin = int(EA[key] / 1e3)
+        return origin - ea_window, origin + ea_window
+
+    ea_co_label = widgets.HTML(f'<b style="color:{_TS_COLOR_CO}">Ea(CO*)</b>')
+    lo_co, hi_co = _bounds('3_CO')
+    ea_co_slider = widgets.IntSlider(value=int(EA['3_CO'] / 1e3), min=lo_co, max=hi_co,
+                                     step=ea_dstep, description='(kJ/mol)',
+                                     style={'description_width': '70px'})
+    ea_o_label = widgets.HTML(f'<b style="color:{_TS_COLOR_O}">Ea(2O*)</b>')
+    lo_o, hi_o = _bounds('3_O')
+    ea_o_slider = widgets.IntSlider(value=int(EA['3_O'] / 1e3), min=lo_o, max=hi_o,
+                                    step=ea_dstep, description='(kJ/mol)',
+                                    style={'description_width': '70px'})
     T_slider = widgets.IntSlider(value=T0, min=T_min, max=T_max, step=T_dstep,
-                                 description='T (K)', style={'description_width': '100px'})
+                                 description='T (K)', style={'description_width': '110px'})
     fe_out, drc_out = widgets.Output(), widgets.Output()
 
     def update(change=None):
-        EA[ea_step] = ea_slider.value * 1e3       # mutate caller's EA dict in place
+        EA['3_CO'] = ea_co_slider.value * 1e3      # mutate caller's EA dict in place
+        EA['3_O']  = ea_o_slider.value * 1e3
         T = T_slider.value
         with fe_out:
             clear_output(wait=True)
-            display(_fe_figure_coox(G, EA, ea_step=ea_step))
+            display(_fe_figure_coox(G, EA, y_range=fe_y_range))
         with drc_out:
             clear_output(wait=True)
-            display(_drc_figure(drc_fn, T, labels=_COOX_DRC_LABELS, bar_color='#2ca02c'))
+            display(_drc_figure(drc_fn, T, labels=_COOX_DRC_LABELS, bar_color=_COOX_BAR_COLORS))
 
-    ea_slider.observe(update, names='value')
+    ea_co_slider.observe(update, names='value')
+    ea_o_slider.observe(update, names='value')
     T_slider.observe(update, names='value')
     update()
     if show:
-        display(widgets.VBox([widgets.HBox([ea_slider, T_slider]),
-                              widgets.HBox([fe_out, drc_out])]))
-    return SimpleNamespace(ea_slider=ea_slider, T_slider=T_slider,
-                           fe_out=fe_out, drc_out=drc_out, update=update)
+        display(widgets.VBox([
+            widgets.HBox([widgets.VBox([ea_co_label, ea_co_slider]),
+                          widgets.VBox([ea_o_label, ea_o_slider]),
+                          T_slider]),
+            widgets.HBox([fe_out, drc_out]),
+        ]))
+    return SimpleNamespace(ea_co_slider=ea_co_slider, ea_o_slider=ea_o_slider,
+                           T_slider=T_slider, fe_out=fe_out, drc_out=drc_out, update=update)
