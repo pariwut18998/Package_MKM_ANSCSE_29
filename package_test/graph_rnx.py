@@ -82,11 +82,13 @@ def draw_network(G, colorscale=_MONO, width_range=(3.0, 13.0), rate_range=(0.0, 
         fig.add_annotation(x=mx, y=my, yshift=25, text=_sci(d['net_rate']),
                            showarrow=False, font=dict(family=FONT, size=12, color='#333'))
 
-    # step-number badges at edge midpoints
+    # step-number badges at edge midpoints (sized to fit the longest step label,
+    # e.g. numeric '1' vs multi-char '3_CO')
+    badge_size = max(18, 10 + 4 * max(len(t) for t in bt))
     fig.add_trace(go.Scatter(
         x=bx, y=by, mode='markers+text', text=bt,
         textfont=dict(color='white', size=10, family=FONT),
-        marker=dict(size=18, color='#37474f', line=dict(color='white', width=1.5)),
+        marker=dict(size=badge_size, color='#37474f', line=dict(color='white', width=1.5)),
         hoverinfo='skip', showlegend=False))
 
     # nodes (gas = white, surface = light grey) + labels below

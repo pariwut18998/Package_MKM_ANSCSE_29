@@ -163,7 +163,7 @@ _COOX_BAR_COLORS = {'1': '#2ca02c', '2': '#2ca02c', '4': '#2ca02c',
 _COOX_ORDER = ['CO(g)+*', '½O₂(g)+*', 'CO*+½O₂+*', 'CO*+O*', 'CO₂*+*', 'CO₂(g)+2*']
 
 
-def _fe_figure_coox(G, EA, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
+def fe_figure_coox(G, EA, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
     """CO-oxidation free-energy diagram matching the reaction network exactly:
         CO(g)+*  <-> CO*        (step 1, barrierless)
         O2(g)+2* <-> 2O*        (step 2, barrierless)
@@ -244,7 +244,7 @@ def make_co_ox_panel(G, EA, drc_fn,
                      T0=600, T_min=300, T_max=1200, T_dstep=50,
                      fe_y_range=None, show=True):
     """CO-oxidation panel: two Ea sliders — LH barrier measured from CO* and from
-    2O* respectively (see _fe_figure_coox) — plus a T slider drive the free-energy
+    2O* respectively (see fe_figure_coox) — plus a T slider drive the free-energy
     diagram + degree-of-rate-control bar chart (no network view). Each Ea slider
     carries a colored label (matching its TS curve's color) instead of the plot.
     EA (dict, J/mol, keys '3_CO'/'3_O') is mutated in place; drc_fn(T) -> {step: X}.
@@ -279,7 +279,7 @@ def make_co_ox_panel(G, EA, drc_fn,
         T = T_slider.value
         with fe_out:
             clear_output(wait=True)
-            display(_fe_figure_coox(G, EA, y_range=fe_y_range))
+            display(fe_figure_coox(G, EA, y_range=fe_y_range))
         with drc_out:
             clear_output(wait=True)
             display(_drc_figure(drc_fn, T, labels=_COOX_DRC_LABELS, bar_color=_COOX_BAR_COLORS))
