@@ -43,9 +43,12 @@ def set_rates(G, rates):
 _MONO = [[0.0, '#cccccc'], [1.0, '#000000']]
 
 
-def draw_network(G, colorscale=_MONO, width_range=(3.0, 13.0), rate_range=(0.0, 15.0)):
+def draw_network(G, colorscale=_MONO, width_range=(3.0, 13.0), rate_range=(0.0, 15.0), notes=None):
     """Publication figure: edge colour AND width encode log10(net rate); log colourbar.
-    Layout is automatic, so this works unchanged for any (acyclic) mechanism."""
+    Layout is automatic, so this works unchanged for any (acyclic) mechanism.
+    notes : optional {step: text} -- small italic label placed under an edge's rate
+    label, e.g. to flag a stoichiometric factor already baked into that net rate
+    (so it isn't mistaken for a bug)."""
     # left-to-right layers from the DAG; order each layer by the barycentre of its
     # predecessors (Sugiyama heuristic) so parallel branches don't cross.
     pos = {}
@@ -81,6 +84,9 @@ def draw_network(G, colorscale=_MONO, width_range=(3.0, 13.0), rate_range=(0.0, 
         bx.append(mx); by.append(my); bt.append(str(d['step']))
         fig.add_annotation(x=mx, y=my, yshift=25, text=_sci(d['net_rate']),
                            showarrow=False, font=dict(family=FONT, size=12, color='#333'))
+        if notes and d['step'] in notes:
+            fig.add_annotation(x=mx, y=my, yshift=40, text=f"<i>{notes[d['step']]}</i>",
+                               showarrow=False, font=dict(family=FONT, size=10, color='#888'))
 
     # step-number badges at edge midpoints (sized to fit the longest step label,
     # e.g. numeric '1' vs multi-char '3_CO')

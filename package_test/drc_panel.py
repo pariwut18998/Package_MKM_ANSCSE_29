@@ -13,6 +13,7 @@
 #                    step_rates_AD, degree_of_rate_control_AD, T_AD)
 from types import SimpleNamespace
 
+import numpy as np
 import ipywidgets as widgets
 import plotly.graph_objects as go
 from IPython.display import display, clear_output
@@ -159,6 +160,11 @@ _TS_COLOR_O  = '#9467bd'   # purple
 _COOX_BAR_COLORS = {'1': '#2ca02c', '2': '#2ca02c', '4': '#2ca02c',
                     '3_CO': _TS_COLOR_CO, '3_O': _TS_COLOR_O}
 
+# clarifying note on the network view: step 2 (O2 dissociative adsorption) is
+# 1 O2 -> 2 O*, so its net rate is intentionally ~half of steps 1/3_CO/3_O/4
+# (all 1:1) -- flagged so it isn't mistaken for a bug
+_COOX_NET_NOTES = {2: '1 O₂ → 2 O*, so rate is half the others'}
+
 # the 6 states that carry the real kinetics (must match the caller's G_CO_ox keys)
 _COOX_ORDER = ['CO(g)+*', '½O₂(g)+*', 'CO*+½O₂+*', 'CO*+O*', 'CO₂*+*', 'CO₂(g)+2*']
 
@@ -239,20 +245,29 @@ def fe_figure_coox(G, EA, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
     return fig
 
 
-def make_co_ox_panel(G, EA, drc_fn,
+def make_co_ox_panel(G, EA, labels, edges, step_rates_fn, drc_fn,
                      ea_min=10, ea_max=200, ea_dstep=5, ea_window=None,
                      T0=600, T_min=300, T_max=1200, T_dstep=50,
-                     fe_y_range=None, show=True):
+                     fe_y_range=None, rate_range=None, show=True):
     """CO-oxidation panel: two Ea sliders — LH barrier measured from CO* and from
     2O* respectively (see fe_figure_coox) — plus a T slider drive the free-energy
-    diagram + degree-of-rate-control bar chart (no network view). Each Ea slider
+    diagram + reaction network + degree-of-rate-control bar chart. Each Ea slider
     carries a colored label (matching its TS curve's color) instead of the plot.
     EA (dict, J/mol, keys '3_CO'/'3_O') is mutated in place; drc_fn(T) -> {step: X}.
+    labels/edges : reaction-network layout (see package_test.graph_rnx); edges'
+                   steps must include the split '3_CO'/'3_O' channels, not a
+                   combined step 3.
+    step_rates_fn(T) -> {step: net_rate} : rates for the network view, keeping
+                   the '3_CO'/'3_O' channels separate (NOT the averaged r3).
     ea_window : if set (kJ/mol), each slider spans its OWN origin Ea (from EA) +/- ea_window,
                 overriding ea_min/ea_max. If None, both sliders share [ea_min, ea_max].
     fe_y_range : optional [ymin, ymax] (kJ/mol) fixing the free-energy diagram's
                  y-axis so it doesn't rescale every time an Ea slider moves.
-                 If None, the axis auto-scales."""
+                 If None, the axis auto-scales.
+    rate_range : optional (lo, hi) log10(net rate) fixing the network's color scale.
+                 If None (default), it is recomputed from the current rates on every
+                 update -- T dominates the rate magnitude far more than Ea, so a
+                 fixed range would wash out contrast across the T slider's span."""
     def _bounds(key):
         if ea_window is None:
             return ea_min, ea_max
@@ -271,7 +286,7 @@ def make_co_ox_panel(G, EA, drc_fn,
                                     style={'description_width': '70px'})
     T_slider = widgets.IntSlider(value=T0, min=T_min, max=T_max, step=T_dstep,
                                  description='T (K)', style={'description_width': '110px'})
-    fe_out, drc_out = widgets.Output(), widgets.Output()
+    fe_out, net_out, drc_out = widgets.Output(), widgets.Output(), widgets.Output()
 
     def update(change=None):
         EA['3_CO'] = ea_co_slider.value * 1e3      # mutate caller's EA dict in place
@@ -280,6 +295,17 @@ def make_co_ox_panel(G, EA, drc_fn,
         with fe_out:
             clear_output(wait=True)
             display(fe_figure_coox(G, EA, y_range=fe_y_range))
+        with net_out:
+            clear_output(wait=True)
+            net = build_network(labels, edges)
+            rates = step_rates_fn(T)
+            set_rates(net, rates)
+            if rate_range is None:
+                logs = np.log10([abs(v) for v in rates.values() if v != 0])
+                rr = (float(np.floor(logs.min())) - 1, float(np.ceil(logs.max())) + 1)
+            else:
+                rr = rate_range
+            display(draw_network(net, rate_range=rr, notes=_COOX_NET_NOTES))
         with drc_out:
             clear_output(wait=True)
             display(_drc_figure(drc_fn, T, labels=_COOX_DRC_LABELS, bar_color=_COOX_BAR_COLORS))
@@ -293,7 +319,146 @@ def make_co_ox_panel(G, EA, drc_fn,
             widgets.HBox([widgets.VBox([ea_co_label, ea_co_slider]),
                           widgets.VBox([ea_o_label, ea_o_slider]),
                           T_slider]),
-            widgets.HBox([fe_out, drc_out]),
+            widgets.HBox([fe_out, net_out]),
+            drc_out,
         ]))
     return SimpleNamespace(ea_co_slider=ea_co_slider, ea_o_slider=ea_o_slider,
-                           T_slider=T_slider, fe_out=fe_out, drc_out=drc_out, update=update)
+                           T_slider=T_slider, fe_out=fe_out, net_out=net_out,
+                           drc_out=drc_out, update=update)
+
+
+# --- branching A/B -> ... -> F panel (illustrative): two independent 2-step
+# surface paths (A*->C*->E*, B*->D*->E*) converge at E*, then continue E*->F*->F(g).
+# colors: A-branch red, B-branch purple (matching the CO-ox convention), merged
+# spine (E*->F*) green.
+_ABF_COLOR_A = '#d62728'   # red
+_ABF_COLOR_B = '#9467bd'   # purple
+_ABF_COLOR_SPINE = '#2ca02c'   # green
+
+_ABF_XS = {'Ag': 0.0, 'Bg': 0.0, 'As': 1.0, 'Bs': 1.0, 'Cs': 2.0, 'Ds': 2.0,
+          'Es': 3.0, 'Fs': 4.0, 'Fg': 5.0}
+_ABF_NAMES = {'Ag': 'A(g) + *', 'As': 'A*', 'Cs': 'C*', 'Bg': 'B(g) + *', 'Bs': 'B*',
+             'Ds': 'D*', 'Es': 'E*', 'Fs': 'F*', 'Fg': 'F(g) + *'}
+_ABF_TST_EDGES = [(2, 'As', 'Cs', _ABF_COLOR_A), (3, 'Cs', 'Es', _ABF_COLOR_A),
+                  (5, 'Bs', 'Ds', _ABF_COLOR_B), (6, 'Ds', 'Es', _ABF_COLOR_B),
+                  (7, 'Es', 'Fs', _ABF_COLOR_SPINE)]
+
+
+def fe_figure_abf(G, EA, w=0.30, w_gas=0.12, state_font_size=10, y_range=None):
+    """Branching free-energy diagram: A(g)->A*->C*->E* and B(g)->B*->D*->E* converge
+    at E*, then E*->F*->F(g).
+    G  : 9-state dict {Ag,As,Cs,Bg,Bs,Ds,Es,Fs,Fg} -> energy (kJ/mol).
+    EA : {2,3,5,6,7: barrier J/mol} for the surface TST steps -- mutated in place
+         by the sliders."""
+    widths = {k: (w_gas if k in ('Ag', 'Bg') else w) for k in _ABF_XS}
+    yshifts = {'Ag': 22, 'Bg': -22, 'As': 14, 'Bs': -22, 'Cs': 14, 'Ds': -22,
+               'Es': 14, 'Fs': 14, 'Fg': 14}
+
+    fig = go.Figure()
+    for key, x in _ABF_XS.items():
+        y, bw = G[key], widths[key]
+        fig.add_trace(go.Scatter(
+            x=[x - bw, x + bw], y=[y, y], mode='lines',
+            line=dict(color='black', width=4), showlegend=False,
+            text=[f'{_ABF_NAMES[key]}<br>G = {y:.1f} kJ/mol'] * 2,
+            hovertemplate='%{text}<extra></extra>',
+        ))
+        fig.add_annotation(x=x, y=y, yshift=yshifts[key], text=_ABF_NAMES[key],
+                           showarrow=False, font=dict(size=state_font_size))
+
+    # barrierless steps: A ads (1), B ads (4), F des (8)
+    for a, b in [('Ag', 'As'), ('Bg', 'Bs'), ('Fs', 'Fg')]:
+        xa, xb = _ABF_XS[a] + widths[a], _ABF_XS[b] - widths[b]
+        fig.add_trace(go.Scatter(x=[xa, xb], y=[G[a], G[b]], mode='lines',
+                                 line=dict(color='#1f77b4', width=2, dash='dot'),
+                                 showlegend=False, hoverinfo='skip'))
+
+    # TST steps: 2 (As->Cs), 3 (Cs->Es), 5 (Bs->Ds), 6 (Ds->Es), 7 (Es->Fs)
+    for step, a, b, color in _ABF_TST_EDGES:
+        xa, xb = _ABF_XS[a] + widths[a], _ABF_XS[b] - widths[b]
+        xpk = (xa + xb) / 2
+        ts = G[a] + EA[step] / 1e3
+        fig.add_trace(go.Scatter(
+            x=[xa, xpk, xb], y=[G[a], ts, G[b]], mode='lines',
+            line=dict(color=color, width=2, shape='spline'), showlegend=False,
+            text=[f'G = {G[a]:.1f} kJ/mol',
+                  f'TS (step {step})<br>Ea{step} = {EA[step]/1e3:.1f} kJ/mol<br>G_TS = {ts:.1f} kJ/mol',
+                  f'G = {G[b]:.1f} kJ/mol'],
+            hovertemplate='%{text}<extra></extra>',
+        ))
+        fig.add_annotation(x=xpk, y=ts, yshift=10, text=f'Ea{step}',
+                           showarrow=False, font=dict(color=color, size=11))
+
+    fig.update_layout(height=320, plot_bgcolor='white', paper_bgcolor='white',
+                      xaxis=dict(visible=False),
+                      yaxis=dict(title='Free energy (kJ/mol)', range=y_range),
+                      margin=dict(l=55, r=10, t=10, b=10), font=dict(family='Arial'))
+    return fig
+
+
+def make_abf_panel(G, EA, labels, edges, step_rates_fn, drc_fn,
+                   ea_min=10, ea_max=150, ea_window=None, ea_step=5,
+                   T0=600, T_min=300, T_max=1200, T_dstep=50,
+                   fe_y_range=None, rate_range=None, show=True):
+    """Branching A/B -> ... -> F panel: one Ea slider per TST step (2,3,5,6,7) plus
+    a T slider drive the free-energy diagram + reaction network + degree-of-rate-
+    control bar chart.
+    EA (dict, J/mol) is mutated in place; drc_fn(T) -> {step: X}.
+    step_rates_fn(T) -> [r_i] (8 net rates, step order 1..8).
+    ea_window : if set (kJ/mol), each slider spans its OWN origin Ea (from EA) +/- ea_window,
+                overriding ea_min/ea_max. If None, all sliders share [ea_min, ea_max].
+    fe_y_range : optional [ymin, ymax] (kJ/mol) fixing the free-energy diagram's y-axis.
+    rate_range : optional (lo, hi) log10(net rate) fixing the network's color scale.
+                 If None, it is recomputed from the current rates on every update."""
+    ea_steps = (2, 3, 5, 6, 7)
+
+    def _bounds(i):
+        if ea_window is None:
+            return ea_min, ea_max
+        origin = EA[i] / 1e3
+        return origin - ea_window, origin + ea_window
+
+    sliders = {}
+    for i in ea_steps:
+        lo, hi = _bounds(i)
+        sliders[i] = widgets.FloatSlider(value=EA[i] / 1e3, min=lo, max=hi, step=ea_step,
+                                         description=f'Ea{i} (kJ/mol)', readout_format='.0f',
+                                         continuous_update=False)
+    T_slider = widgets.IntSlider(value=T0, min=T_min, max=T_max, step=T_dstep,
+                                 description='T (K)', style={'description_width': '110px'})
+    fe_out, net_out, drc_out = widgets.Output(), widgets.Output(), widgets.Output()
+
+    def update(change=None):
+        for i in ea_steps:
+            EA[i] = sliders[i].value * 1e3       # mutate caller's EA dict in place
+        T = T_slider.value
+        with fe_out:
+            clear_output(wait=True)
+            display(fe_figure_abf(G, EA, y_range=fe_y_range))
+        with net_out:
+            clear_output(wait=True)
+            net = build_network(labels, edges)
+            rates = step_rates_fn(T)
+            set_rates(net, rates)
+            if rate_range is None:
+                logs = np.log10([abs(v) for v in rates if v != 0])
+                rr = (float(np.floor(logs.min())) - 1, float(np.ceil(logs.max())) + 1)
+            else:
+                rr = rate_range
+            display(draw_network(net, rate_range=rr))
+        with drc_out:
+            clear_output(wait=True)
+            display(_drc_figure(drc_fn, T))
+
+    for s in sliders.values():
+        s.observe(update, names='value')
+    T_slider.observe(update, names='value')
+    update()
+    if show:
+        display(widgets.VBox([
+            widgets.HBox([widgets.Label('Activation Ea:')] + list(sliders.values()) + [T_slider]),
+            widgets.HBox([fe_out, net_out]),
+            drc_out,
+        ]))
+    return SimpleNamespace(sliders=sliders, T_slider=T_slider, fe_out=fe_out,
+                           net_out=net_out, drc_out=drc_out, update=update)
