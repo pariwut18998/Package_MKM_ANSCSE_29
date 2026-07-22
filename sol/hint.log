@@ -1,0 +1,51 @@
+EX.1
+    #Create rate expressions for each step, in the A -> B(g) direction
+    r1 = k_fwd[1] * P_A * theta_star - k_bwd[1] * theta_A    # A(g) + * <-> A*
+    r2 = k_fwd[2] * theta_A - k_bwd[2] * theta_B             # A* <-> B*
+    r3 = k_fwd[3] * theta_B - k_bwd[3] * theta_star * P_B    # B* <-> B(g) + *
+
+
+    #d(theta_i)/dt = sum of (rate in - rate out) for each species i
+    dydt = np.zeros(3)
+    dydt[0] = r1 - r2    #d(A*)/dt
+    dydt[1] = r2 - r3    #d(B*)/dt
+    dydt[2] = r3 - r1    #d(*)/dt
+
+EX.2
+def dydt_AD(t, y, kf, kb):
+    theta_A, theta_B, theta_C, theta_D, theta_star = y
+    r1 = kf[1] * P_A_AD * theta_star - kb[1] * theta_A
+    r2 = kf[2] * theta_A - kb[2] * theta_B
+    r3 = kf[3] * theta_B - kb[3] * theta_C
+    r4 = kf[4] * theta_C - kb[4] * theta_D
+    r5 = kf[5] * theta_D - kb[5] * P_D_AD * theta_star
+
+    dydt = np.zeros(5)
+    dydt[0] = r1 - r2    # d(theta_A)/dt
+    dydt[1] = r2 - r3    # d(theta_B)/dt
+    dydt[2] = r3 - r4    # d(theta_C)/dt
+    dydt[3] = r4 - r5    # d(theta_D)/dt
+    dydt[4] = r5 - r1    # d(theta_*)/dt
+    return dydt
+EX.3
+def dydt_ABF(t, y, kf, kb):
+    theta_A, theta_C, theta_B, theta_D, theta_E, theta_F = y
+    theta_star = 1.0 - theta_A - theta_C - theta_B - theta_D - theta_E - theta_F
+
+    r1 = kf[1] * P_A_ABF * theta_star - kb[1] * theta_A
+    r2 = kf[2] * theta_A - kb[2] * theta_C
+    r3 = kf[3] * theta_C - kb[3] * theta_E
+    r4 = kf[4] * P_B_ABF * theta_star - kb[4] * theta_B
+    r5 = kf[5] * theta_B - kb[5] * theta_D
+    r6 = kf[6] * theta_D - kb[6] * theta_E
+    r7 = kf[7] * theta_E - kb[7] * theta_F
+    r8 = kf[8] * theta_F - kb[8] * P_F_ABF * theta_star
+
+    dydt = np.zeros(6)
+    dydt[0] = r1 - r2        # d(theta_A)/dt
+    dydt[1] = r2 - r3        # d(theta_C)/dt
+    dydt[2] = r4 - r5        # d(theta_B)/dt
+    dydt[3] = r5 - r6        # d(theta_D)/dt
+    dydt[4] = r3 + r6 - r7   # d(theta_E)/dt 
+    dydt[5] = r7 - r8        # d(theta_F)/dt
+    return dydt
